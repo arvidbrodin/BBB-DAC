@@ -1,0 +1,192 @@
+/*
+ * Copyright (C) 2012 Texas Instruments Incorporated - http://www.ti.com/
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/pinctrl/am33xx.h>
+
+/*
+ * Helper to show loaded overlays under: /proc/device-tree/chosen/overlays/
+ */
+&{/chosen} {
+	overlays {
+		BB-GRAPH-AUDIO-PCM5XXX-00A0 = __TIMESTAMP__;
+	};
+};
+
+
+/*
+ * Free up the pins used by the cape from the pinmux helpers.
+ */
+&ocp {
+	P9_25_pinmux { status = "disabled"; };  /* mcasp0_ahclkx */
+	P9_28_pinmux { status = "disabled"; };  /* mcasp0_axr2 */
+	P9_29_pinmux { status = "disabled"; };  /* mcasp0_fsx */
+	P9_30_pinmux { status = "disabled"; };  /* mcasp0_axr0 */
+	P9_31_pinmux { status = "disabled"; };  /* mcasp0_aclkx */
+};
+
+&am33xx_pinmux {
+	mcasp0_pins: mcasp0_pins {
+		pinctrl-single,pins = <
+			AM33XX_PADCONF(AM335X_PIN_MCASP0_AHCLKX, PIN_INPUT_PULLUP, MUX_MODE0)	/* P9_25 */
+			AM33XX_PADCONF(AM335X_PIN_MCASP0_AHCLKR, PIN_OUTPUT_PULLDOWN, MUX_MODE2)/* P9_28 mcasp0_axr2 */
+			AM33XX_PADCONF(AM335X_PIN_MCASP0_FSX, PIN_OUTPUT_PULLUP, MUX_MODE0)	/* P9_29 */
+			AM33XX_PADCONF(AM335X_PIN_MCASP0_AXR0, PIN_OUTPUT_PULLDOWN, MUX_MODE0)	/* P9_30 mcasp0_axr0 */
+			AM33XX_PADCONF(AM335X_PIN_MCASP0_ACLKX, PIN_OUTPUT_PULLDOWN, MUX_MODE0)	/* P9_31 */
+			AM33XX_PADCONF(AM335X_PIN_GPMC_A11, PIN_OUTPUT_PULLDOWN, MUX_MODE7)	/* gpmc_a11.GPIO1_27 - Clock disable */
+		>;
+	};
+};
+
+&mcasp0 {
+	#sound-dai-cells = <0>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&mcasp0_pins>;
+	status = "okay";
+	op-mode = <0>;	/* MCASP_IIS_MODE */
+	tdm-slots = <2>;
+	serial-dir = <	/* 0: INACTIVE, 1: TX, 2: RX */
+			0 0 1 0  // Pi DAC+
+//			1 0 0 0  // Pi DAC Pro
+//			1 0 1 0  // Both
+		>;
+	tx-num-evt = <32>;
+	rx-num-evt = <32>;
+
+	mcasp0_port: port {
+		cpu_dai0: endpoint@0 {
+			dai-format = "i2s";
+			frame-master = <&mcasp0_port>;
+			bitclock-master = <&mcasp0_port>;
+			remote-endpoint = <&codec_dai0>;
+			clocks = <&clk_mcasp0>;
+		};
+/*
+		// Note this does NOT work! Cannot get sound from both codecs. :(
+		cpu_dai1: endpoint@1 {
+			dai-format = "i2s";
+			frame-master = <&mcasp0_port>;
+			bitclock-master = <&mcasp0_port>;
+			remote-endpoint = <&codec_dai1>;
+			clocks = <&clk_mcasp0>;
+		};
+*/
+	};
+};
+
+
+/*
+ * Raspberry Pi DAC+/PRO power supplies
+ *
+ * BBB-SRM does not say which 3.3 V rail is on P9 3&4.
+ * https://elinux.org/BeagleBone_Power_Management says 3v3b/3v3exp. No such power
+ * rail in the device tree though :( Guess I'll have to make my own?
+ *
+ * SYS_5V is created from VDD_5V (power plug) or USB by TPS65217C. Also missing in the device tree!
+ * vdd_3v3exp (same as vdd_3v3b on the BBB) is created from VDD_5V by TL5209. Enabled by vdd_3v3aux.
+ */
+&{/} {
+	/*  BBB SYS_5V (P9 7&8) */
+	vdd_sys5v: fixedregulator-sys5v {
+		compatible = "regulator-fixed";
+		regulator-name = "vdd_sys5v";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+	};
+
+	/*  BBB VDD_3V3B/VDD_3V3EXP (P9 3&4) */
+	vdd_3v3exp: fixedregulator-3v3exp {
+		compatible = "regulator-fixed";
+		regulator-name = "vdd_3v3exp";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		vin-supply = <&vdd_sys5v>;
+	};
+
+	avdd_3v3: fixedregulator-3v3 {
+		compatible = "regulator-fixed";
+		regulator-name = "avdd_3v3";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		vin-supply = <&vdd_sys5v>;
+	};
+
+
+	clk_mcasp0_fixed: clk_mcasp0_fixed {
+		#clock-cells = <0>;
+		compatible = "fixed-clock";
+		clock-frequency = <24576000>;
+	};
+
+	clk_mcasp0: clk_mcasp0 {
+		#clock-cells = <0>;
+		compatible = "gpio-gate-clock";
+		clocks = <&clk_mcasp0_fixed>;
+		enable-gpios = <&gpio1 27 0>; /* BeagleBone Black Clk enable on GPIO1_27 */
+	};
+
+	sound {
+		compatible = "audio-graph-card";
+		label = "AmazingDAC";
+/*
+		routing = "codec0 Playback", "DAI0 Playback",
+			  "codec1 Playback", "DAI1 Playback";
+*/
+		dais = <&mcasp0_port>;
+        };
+};
+
+&i2c2 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	pcm5122@4c {
+		#sound-dai-cells = <0>;
+		compatible = "ti,pcm5122";
+		reg = <0x4c>;
+
+		// AVDD created on-board Pi-DAC+ from RPi pin 2 = 5 V.
+		AVDD-supply = <&avdd_3v3>;
+		// DVDD fed directly from RPi pin 1 = 3.3 V.
+		DVDD-supply = <&vdd_3v3exp>;
+		// CPVDD fed directly from RPi pin 1 = 3.3 V.
+		CPVDD-supply = <&vdd_3v3exp>;
+
+//		audio-graph-card,prefix = "codec0";
+		port {
+			codec_dai0: endpoint {
+//				audio-graph-card,convert-channels = <2>;
+				remote-endpoint = <&cpu_dai0>;
+			};
+		};
+	};
+	pcm5142@4e {
+		#sound-dai-cells = <0>;
+		compatible = "ti,pcm5142";
+		reg = <0x4e>;
+
+		// AVDD created on-board Pi-DAC+ from RPi pin 2 = 5 V.
+		AVDD-supply = <&avdd_3v3>;
+		// DVDD fed directly from RPi pin 1 = 3.3 V.
+		DVDD-supply = <&vdd_3v3exp>;
+		// CPVDD fed directly from RPi pin 1 = 3.3 V.
+		CPVDD-supply = <&vdd_3v3exp>;
+
+//		audio-graph-card,prefix = "codec1";
+/*
+		port {
+			codec_dai1: endpoint {
+//				audio-graph-card,convert-channels = <2>;
+				remote-endpoint = <&cpu_dai1>;
+			};
+		};
+*/
+	};
+};
